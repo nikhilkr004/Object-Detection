@@ -42,6 +42,8 @@ class MainActivity : AppCompatActivity() {
     private var cameraSelector: CameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var objectDetector: ObjectDetector
+    private var imageWidth = 0
+    private var imageHeight = 0
 
     // Common COCO dataset classes
     private val cocoClasses = arrayOf(
@@ -67,17 +69,16 @@ class MainActivity : AppCompatActivity() {
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
-
         // Initialize TensorFlow Lite object detector
         val options = ObjectDetectorOptions.builder()
-            .setMaxResults(5)  // Maximum number of results to return
-            .setScoreThreshold(0.5f)  // Score threshold
+            .setMaxResults(10)
+            .setScoreThreshold(0.4f)
             .build()
 
         try {
             objectDetector = ObjectDetector.createFromFileAndOptions(
                 this,
-                "model.tflite",  // Your model file name in assets folder
+                "model.tflite",
                 options
             )
         } catch (e: Exception) {
@@ -85,7 +86,6 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Object detector initialization failed", Toast.LENGTH_LONG).show()
         }
 
-        // Request camera permissions
         if (allPermissionsGranted()) {
             startCamera()
         } else {
@@ -94,7 +94,6 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // Set up camera switch button
         binding.switchCameraButton.setOnClickListener {
             cameraSelector = if (cameraSelector == CameraSelector.DEFAULT_BACK_CAMERA) {
                 CameraSelector.DEFAULT_FRONT_CAMERA
@@ -113,33 +112,35 @@ class MainActivity : AppCompatActivity() {
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
-            // Preview
             val preview = Preview.Builder()
                 .build()
                 .also {
                     it.setSurfaceProvider(binding.cameraPreview.surfaceProvider)
                 }
 
-            // Image analysis
             val imageAnalysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
-                    it.setAnalyzer(cameraExecutor, ImageAnalyzer(objectDetector) { detectionResults ->
+                    it.setAnalyzer(cameraExecutor, ImageAnalyzer(objectDetector) { detectionResults, width, height ->
                         runOnUiThread {
+                            imageWidth = width
+                            imageHeight = height
+                            binding.boundingBoxView.setDetections(detectionResults, width, height)
+
                             if (detectionResults.isNotEmpty()) {
-                                val objectNames = detectionResults.joinToString(", ") { result ->
+                                val objectNames = detectionResults.joinToString("\n") { result ->
                                     val classId = result.categories[0].index
                                     val className = if (classId < cocoClasses.size) {
                                         cocoClasses[classId]
                                     } else {
                                         "Class $classId"
                                     }
-                                    "$className (${(result.categories[0].score * 100).toInt()}%)"
+                                    "• $className (${(result.categories[0].score * 100).toInt()}%)"
                                 }
-                                binding.objectNameTextView.text = objectNames
+                                binding.objectNameTextView.text = "Detected Objects:\n$objectNames"
                             } else {
-                                binding.objectNameTextView.text = "No object detected"
+                                binding.objectNameTextView.text = "No objects detected"
                             }
                         }
                     })
@@ -156,10 +157,9 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    // ImageAnalyzer class - MainActivity के अंदर ही
     private inner class ImageAnalyzer(
         private val objectDetector: ObjectDetector,
-        private val onDetectionResult: (List<org.tensorflow.lite.task.vision.detector.Detection>) -> Unit
+        private val onDetectionResult: (List<org.tensorflow.lite.task.vision.detector.Detection>, Int, Int) -> Unit
     ) : ImageAnalysis.Analyzer {
 
         @SuppressLint("UnsafeOptInUsageError")
@@ -167,16 +167,12 @@ class MainActivity : AppCompatActivity() {
             val mediaImage = imageProxy.image
             if (mediaImage != null) {
                 try {
-                    // Convert ImageProxy to Bitmap using a more reliable method
                     val bitmap = convertYuv420888ToBitmap(mediaImage)
 
                     if (bitmap != null) {
-                        // Convert Bitmap to TensorImage
                         val tensorImage = TensorImage.fromBitmap(bitmap)
-
-                        // Perform object detection
                         val results = objectDetector.detect(tensorImage)
-                        onDetectionResult(results)
+                        onDetectionResult(results, mediaImage.width, mediaImage.height)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Object detection failed", e)
@@ -186,7 +182,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Helper function - MainActivity के अंदर ही
     @SuppressLint("UnsafeOptInUsageError")
     private fun convertYuv420888ToBitmap(image: android.media.Image): Bitmap? {
         val yBuffer = image.planes[0].buffer
@@ -240,6 +235,11 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+        try {
+            objectDetector.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing object detector", e)
+        }
     }
 
     companion object {

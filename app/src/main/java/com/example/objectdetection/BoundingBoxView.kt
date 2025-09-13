@@ -12,9 +12,20 @@ class BoundingBoxView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    private val detections = mutableListOf<Detection>()
+    private var detections = mutableListOf<Detection>()
+    private var scaleFactor = 1.0f
+    private var offsetX = 0f
+    private var offsetY = 0f
+
+    // Different colors for different objects
+    private val colors = listOf(
+        Color.RED, Color.BLUE, Color.GREEN, Color.YELLOW,
+        Color.CYAN, Color.MAGENTA, Color.GRAY, Color.rgb(255, 165, 0), // Orange
+        Color.rgb(128, 0, 128), // Purple
+        Color.rgb(255, 192, 203)  // Pink
+    )
+
     private val paint = Paint().apply {
-        color = Color.RED
         style = Paint.Style.STROKE
         strokeWidth = 4.0f
         isAntiAlias = true
@@ -28,46 +39,69 @@ class BoundingBoxView @JvmOverloads constructor(
     }
 
     private val bgPaint = Paint().apply {
-        color = Color.RED
         style = Paint.Style.FILL
         isAntiAlias = true
     }
 
-    fun setDetections(newDetections: List<Detection>) {
+    fun setDetections(newDetections: List<Detection>, imageWidth: Int, imageHeight: Int) {
         detections.clear()
         detections.addAll(newDetections)
+
+        // Calculate scaling factors to match view size with image size
+        scaleFactor = Math.min(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+        offsetX = (width - imageWidth * scaleFactor) / 2
+        offsetY = (height - imageHeight * scaleFactor) / 2
+
         invalidate() // Redraw the view
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        for (detection in detections) {
+        for ((index, detection) in detections.withIndex()) {
             val boundingBox = detection.boundingBox
+
+            // Transform coordinates to match view size
+            val left = boundingBox.left * scaleFactor + offsetX
+            val top = boundingBox.top * scaleFactor + offsetY
+            val right = boundingBox.right * scaleFactor + offsetX
+            val bottom = boundingBox.bottom * scaleFactor + offsetY
+
+            val transformedRect = RectF(left, top, right, bottom)
+
             val category = detection.categories[0]
             val label = "${category.label} ${(category.score * 100).toInt()}%"
 
+            // Set different color for each object
+            val color = getColorForIndex(index)
+            paint.color = color
+            bgPaint.color = color
+
             // Draw bounding box
-            canvas.drawRect(boundingBox, paint)
+            canvas.drawRect(transformedRect, paint)
 
             // Draw label background
             val textWidth = textPaint.measureText(label)
             val textHeight = textPaint.textSize
             canvas.drawRect(
-                boundingBox.left,
-                boundingBox.top - textHeight,
-                boundingBox.left + textWidth + 8,
-                boundingBox.top,
+                left,
+                top - textHeight,
+                left + textWidth + 8,
+                top,
                 bgPaint
             )
 
             // Draw label text
             canvas.drawText(
                 label,
-                boundingBox.left + 4,
-                boundingBox.top - 4,
+                left + 4,
+                top - 4,
                 textPaint
             )
         }
+    }
+
+    private fun getColorForIndex(index: Int): Int {
+        return colors[index % colors.size]
     }
 }
